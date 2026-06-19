@@ -1,0 +1,22 @@
+# Environments
+securedsc_env/
+env/
+venv/
+.env
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Models and checkpoints
+*.pt
+*.pth
+
+# Results and logs
+*.json
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
