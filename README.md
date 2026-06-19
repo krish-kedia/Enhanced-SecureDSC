@@ -66,7 +66,7 @@ graph TD
     end
 
     subgraph Channel [Wireless Channel]
-        A_ChEnc -->|Fading + AWGN| Splitter(( ))
+        A_ChEnc -->|Fading + AWGN| Splitter((+))
     end
 
     subgraph Bob [Bob RX]
@@ -90,7 +90,7 @@ graph TD
 
     %% Loss styling
     subgraph Adversarial [Enhancement 2: Adaptive Loss]
-        Loss(L_joint = L_Bob + | L_Eve - λ_adaptive |)
+        Loss["L_joint = L_Bob + | L_Eve - λ_adaptive |"]
     end
     B_Output -.-> Loss
     E_Output -.-> Loss
