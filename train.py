@@ -7,11 +7,10 @@ Implements the modified Algorithm 1 from the base paper with:
   - Adaptive lambda scheduler per epoch (Enhancement 2)
 
 Run:
-    python train.py --epochs 500 --snr 12 --batch_size 64
+    python train.py --epochs 150 --snr 12 --batch_size 512
 """
 
 import argparse
-import math
 import json
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
@@ -20,7 +19,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
-from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from model import SecureDSC, CSIKeyGenerator
@@ -30,35 +28,19 @@ from model import SecureDSC, CSIKeyGenerator
 # EUROPARL DATASET
 # ─────────────────────────────────────────────────────────────────
 class EuroParlDataset(Dataset):
-    """
-    EuroParl dataset using Hugging Face datasets and transformers tokenizer.
-    """
-    def __init__(self, tokenizer, seq_len=20, size=50000):
-        print(f"[Dataset] Loading Europarl en-fr dataset (subset: {size})...")
-        dataset = load_dataset("Helsinki-NLP/europarl", "en-fr", split="train")
-        
-        if size > 0 and size < len(dataset):
-            dataset = dataset.select(range(size))
-            
-        self.seq_len = seq_len
-        self.tokenizer = tokenizer
-        self.data = dataset["translation"]
+    def __init__(self, seq_len=20, cache_path=None):
+        if cache_path is None:
+            cache_path = f"europarl_cache_seqlen{seq_len}.pt"
+        print(f"[Dataset] Loading pre-tokenized cache from {cache_path}...")
+        self.input_ids = torch.load(cache_path)
+        print(f"[Dataset] Loaded {len(self.input_ids):,} samples")
 
     def __len__(self):
-        return len(self.data)
+        return len(self.input_ids)
 
     def __getitem__(self, idx):
-        text = self.data[idx]["en"]
-        encoded = self.tokenizer(
-            text, 
-            padding="max_length", 
-            truncation=True, 
-            max_length=self.seq_len, 
-            return_tensors="pt"
-        )
-        src = encoded["input_ids"].squeeze(0)
-        tgt = src.clone()
-        return src, tgt
+        src = self.input_ids[idx]
+        return src, src
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -89,15 +71,32 @@ def train(args):
     args.vocab_size = tokenizer.vocab_size
     print(f"[Setup] Tokenizer vocab size: {args.vocab_size}")
 
-    dataset = EuroParlDataset(tokenizer, args.seq_len, args.dataset_size)
-    loader  = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+    dataset = EuroParlDataset(seq_len=args.seq_len)
+
+    train_size = int(0.9 * len(dataset))
+    test_size = len(dataset) - train_size
+    train_dataset, _ = torch.utils.data.random_split(
+        dataset, [train_size, test_size],
+        generator=torch.Generator().manual_seed(42)
+    )
+    print(f"[Setup] Split dataset into {train_size} train and {test_size} test samples")
+
+    loader  = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
+        prefetch_factor=2,
+        persistent_workers=True
+    )
 
     # ── Model ──────────────────────────────────────────────────
     model = SecureDSC(
         vocab_size   = args.vocab_size,
         d_model      = 128,
         channel_dim  = 16,
-        csi_dim      = 32,
+        csi_dim      = 64,
         key_dim      = 64,
         nhead        = 8,
         num_layers   = 4
@@ -136,6 +135,12 @@ def train(args):
         model.lambda_sched = checkpoint['lambda_sched']
         history = checkpoint['history']
         start_epoch = checkpoint['epoch'] + 1
+        # Override learning rate with current args (enables LR fine-tuning)
+        for pg in opt_ab.param_groups:
+            pg['lr'] = args.lr
+        for pg in opt_eve.param_groups:
+            pg['lr'] = args.lr
+        print(f"[Train] Resumed from epoch {checkpoint['epoch']}  →  starting epoch {start_epoch}  (lr={args.lr})")
 
     print("\n[Train] Starting training loop ...\n")
     print(f"{'Epoch':>6}  {'L_Bob':>8}  {'L_Eve':>8}  {'L_key':>8}  {'lam':>6}")
@@ -155,8 +160,8 @@ def train(args):
             B   = src.size(0)
 
             # ── ★ Enhancement 1: generate CSI estimates ────────
-            h_alice, h_bob, h_eve = CSIKeyGenerator.simulate_csi(
-                B, csi_dim=32, snr_db=args.snr, device=device
+            h_alice, h_bob, _ = CSIKeyGenerator.simulate_csi(
+                B, csi_dim=64, snr_db=args.snr, device=device
             )
 
             # ── 4-phase alternating training (Algorithm 1) ────
@@ -169,6 +174,7 @@ def train(args):
                 sem_out  = model.sem_decoder(sem_feat, tgt[:, :-1])
                 loss     = cross_entropy_loss(sem_out, tgt[:, 1:])
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(alice_bob_params, max_norm=1.0)
                 opt_ab.step()
 
             elif phase == 1:
@@ -186,7 +192,8 @@ def train(args):
                 )
                 # Key consistency loss
                 l_key    = CSIKeyGenerator.consistency_loss(key_a, key_b)
-                (loss + 0.5 * l_key).backward()
+                (loss + 1.0 * l_key).backward()
+                torch.nn.utils.clip_grad_norm_(alice_bob_params, max_norm=1.0)
                 opt_ab.step()
                 epoch_loss_key += l_key.item()
                 num_key_batches += 1
@@ -195,15 +202,16 @@ def train(args):
                 # Phase 2: train whole network with joint adversarial loss
                 opt_ab.zero_grad()
                 bob_log, eve_log, key_a, key_b = model(
-                    src, tgt[:, :-1], h_alice, h_bob, h_eve, snr_db=args.snr
+                    src, tgt[:, :-1], h_alice, h_bob, snr_db=args.snr
                 )
                 l_bob    = cross_entropy_loss(bob_log, tgt[:, 1:])
                 l_eve    = cross_entropy_loss(eve_log, tgt[:, 1:])
                 l_key    = CSIKeyGenerator.consistency_loss(key_a, key_b)
                 # Enhancement 2: use adaptive lambda
                 l_joint  = model.lambda_sched.joint_loss(l_bob, l_eve)
-                total    = l_joint + 0.3 * l_key
+                total    = l_joint + 1.0 * l_key
                 total.backward()
+                torch.nn.utils.clip_grad_norm_(alice_bob_params, max_norm=1.0)
                 opt_ab.step()
                 epoch_loss_bob += l_bob.item()
                 epoch_loss_eve += l_eve.item()
@@ -214,11 +222,15 @@ def train(args):
             else:
                 # Phase 3: train Eve's network independently
                 opt_eve.zero_grad()
-                _, eve_log, _, _ = model(
-                    src, tgt[:, :-1], h_alice, h_bob, h_eve, snr_db=args.snr
-                )
+                # Bypass Bob's forward pass and freeze Alice's graph to save GPU cycles
+                with torch.no_grad():
+                    _, y_bar, _ = model.forward_alice(src, h_alice, snr_db=args.snr)
+                rnd = torch.randn(B, model.d_model, device=device).unsqueeze(1)
+                eve_log = model.forward_eve(y_bar, tgt[:, :-1], rnd)
+                
                 l_eve_ind = cross_entropy_loss(eve_log, tgt[:, 1:])
                 l_eve_ind.backward()
+                torch.nn.utils.clip_grad_norm_(eve_params, max_norm=1.0)
                 opt_eve.step()
 
         # ── End of epoch: update λ (Enhancement 2) ────────────
@@ -233,9 +245,8 @@ def train(args):
             history["loss_key"].append(avg_key)
             history["lambda"].append(new_lam)
 
-            if epoch % 5 == 0 or epoch == 1:
-                print(f"{epoch:>6}  {avg_bob:>8.4f}  {avg_eve:>8.4f}  "
-                      f"{avg_key:>8.4f}  {new_lam:>6.2f}")
+            
+            print(f"{epoch:>6}  {avg_bob:>8.4f}  {avg_eve:>8.4f}  "f"{avg_key:>8.4f}  {new_lam:>6.2f}")
                 
             torch.save({
                 'epoch': epoch,
@@ -261,12 +272,10 @@ def train(args):
 # ─────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Enhanced SecureDSC")
-    parser.add_argument("--epochs",       type=int,   default=500)
-    parser.add_argument("--batch_size",   type=int,   default=64)
-    parser.add_argument("--lr",           type=float, default=5e-4)
+    parser.add_argument("--epochs",       type=int,   default=150)
+    parser.add_argument("--batch_size",   type=int,   default=512)
+    parser.add_argument("--lr",           type=float, default=2.5e-4)
     parser.add_argument("--snr",          type=float, default=12.0)
-    parser.add_argument("--vocab_size",   type=int,   default=1000)
     parser.add_argument("--seq_len",      type=int,   default=20)
-    parser.add_argument("--dataset_size", type=int,   default=20000)
     args = parser.parse_args()
     train(args)
