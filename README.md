@@ -47,31 +47,9 @@ graph LR
 
 ---
 
-## Results
+## Results & Analysis
 
-### Bob vs Eve — BLEU Scores Across SNR
-
-| SNR (dB) | Bob BLEU-1 | Bob BLEU-4 | Eve BLEU-1 | Eve BLEU-4 | Security Gap (BLEU-4) |
-|----------|-----------|-----------|-----------|-----------|----------------------|
-| 0  | 0.1305 | 0.0000 | 0.1463 | 0.0011 | −0.0011 |
-| 3  | 0.2997 | 0.0064 | 0.2438 | 0.0100 | −0.0036 |
-| 6  | 0.5927 | 0.1144 | 0.3539 | 0.0304 | +0.0840 |
-| 9  | 0.8429 | 0.5080 | 0.4554 | 0.0742 | +0.4338 |
-| 12 | 0.9330 | 0.7244 | 0.5373 | 0.1308 | +0.5936 |
-| **15** | **0.9523** | **0.7995** | **0.5649** | **0.1499** | **+0.6496** |
-
-### Comparison with Base Paper (@ 15 dB)
-
-| Metric | Base Paper (Shi et al.) | Ours |
-|--------|------------------------|------|
-| Bob BLEU-1 | ~0.90 | **0.9523** (+5.2%) ✅ |
-| Bob BLEU-4 | ~0.80 | **0.7995** ✅ |
-| Key Mechanism | Random session keys | CSI-derived (100% agreement) |
-| λ Control | Fixed at 6 | Adaptive: 8.0 → ~2.5 |
-
-> **Key Agreement Rate: 100.0%** — The CSI-based key generator produces perfectly matching keys at both endpoints across all tested SNR levels.
-
-📄 **For detailed analysis**, see [project_analysis_and_comparison.md](project_analysis_and_comparison.md)
+For a comprehensive breakdown of the training process, evaluation metrics (including BLEU scores and Key Agreement Rate), and a detailed comparison with the base paper, please refer to the **[Project Analysis & Comparison Document](project_analysis_and_comparison.md)**.
 
 ---
 
