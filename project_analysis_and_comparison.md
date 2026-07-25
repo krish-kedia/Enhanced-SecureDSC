@@ -81,8 +81,8 @@ graph LR
 | **Semantic Decoder** | 4× Transformer decoder layers + log-softmax prediction head | Transformer decoder (similar) |
 | **Encryptor** | Linear projection (concat features + key → $d_\text{model}$), 4× Transformer encoder, sigmoid consecutive mask | Encryption module with key processing |
 | **Decryptor** | Linear projection (concat ciphertext + key → $d_\text{model}$), 4× Transformer decoder | Decryption module with key processing |
-| **Channel Encoder** | Dense: $d_\text{model}$ → 256 → $\text{channel\_dim}$ (16) | Dense layers |
-| **Channel Decoder** | Dense: $\text{channel\_dim}$ → 256 → $d_\text{model}$ | Dense layers |
+| **Channel Encoder** | Dense: $d_\text{model}$ → 256 → $\text{channel-dim}$ (16) | Dense layers |
+| **Channel Decoder** | Dense: $\text{channel-dim}$ → 256 → $d_\text{model}$ | Dense layers |
 | **Channel** | AWGN with power-normalized noise | AWGN (Rayleigh mentioned in paper) |
 | **Key Generation** | ★ CSI-based MLP ($\mathbb{C}^{64} \to \mathbb{R}^{64}$, quantized to $\{-1,+1\}$) | Random session keys |
 | **λ Control** | ★ Adaptive bang-bang controller with target gap | Fixed λ = 6 |
@@ -165,18 +165,17 @@ This fixed value is problematic because:
 The scheduler uses a **sign-based (bang-bang) controller**:
 
 $$
-\lambda^{(t+1)} = \text{clip}\left[\lambda^{(t)} + \eta \cdot \text{sign}(\text{gap} - \text{target\_gap}),\ \lambda_\text{min},\ \lambda_\text{max}\right]
+\lambda^{(t+1)} = \text{clip}\left[\lambda^{(t)} + \eta \cdot \text{sign}(\text{gap} - \text{target-gap}),\ \lambda_\text{min},\ \lambda_\text{max}\right]
 $$
 
 where:
 - $\text{gap} = \mathcal{L}_\text{Eve} - \mathcal{L}_\text{Bob}$
-- $\text{target\_gap} = 1.5$ (desired security margin)
+- $\text{target-gap} = 1.5$ (desired security margin)
 - $\eta = 0.1$ (step size)
 - $\lambda \in [1.0, 8.0]$ (clipping bounds)
 
 **Control logic:**
-- If $\text{gap} < \text{target\_gap}$: Eve is too good → **increase λ** to push Eve's loss target higher
-- If $\text{gap} > \text{target\_gap}$: gap is healthy → **decrease λ** to let Bob's reconstruction improve
+- If $\text{gap} > \text{target-gap}$: gap is healthy → **decrease λ** to let Bob's reconstruction improve
 
 ### 4.3 Lambda Trajectory Analysis
 
