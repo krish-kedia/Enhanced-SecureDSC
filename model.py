@@ -179,7 +179,7 @@ class CSIKeyGenerator(nn.Module):
     over coherence time. Eve, at a different physical location, sees a different
     channel response and cannot reproduce the key.
     """
-    def __init__(self, csi_dim: int = 32, hidden_dim: int = 128,
+    def __init__(self, csi_dim: int = 64, hidden_dim: int = 128,
                  key_dim: int = 64, quantize: bool = True):
         super().__init__()
         # Input: real + imaginary parts concatenated → 2 * csi_dim
@@ -216,7 +216,7 @@ class CSIKeyGenerator(nn.Module):
         return F.mse_loss(k_alice, k_bob)
 
     @staticmethod
-    def simulate_csi(batch_size: int, csi_dim: int = 32,
+    def simulate_csi(batch_size: int, csi_dim: int = 64,
                      snr_db: float = 12.0, device="cpu"):
         """
         Utility: generates a pair of correlated CSI estimates (Alice, Bob)
@@ -231,18 +231,19 @@ class CSIKeyGenerator(nn.Module):
                               + 1j * torch.randn_like(h_true.imag))
         noise_b    = sigma * (torch.randn_like(h_true.real)
                               + 1j * torch.randn_like(h_true.imag))
-        h_alice    = h_true + noise_a
-        h_bob      = h_true + noise_b
+        h_a        = h_true + noise_a
+        h_b        = h_true + noise_b
         # Eve sees a completely different channel (different location)
         h_eve      = (torch.randn(batch_size, csi_dim)
                       + 1j * torch.randn(batch_size, csi_dim)).to(device) / math.sqrt(2)
-        return h_alice, h_bob, h_eve
+        return h_a, h_b, h_eve
 
 
 # ─────────────────────────────────────────────────────────────────
 # 9. ★ ENHANCEMENT 2 — ADAPTIVE LAMBDA SCHEDULER
 #    Replaces the fixed λ=6 hyperparameter in the adversarial loss
-#    with a self-correcting control loop that adjusts λ each epoch
+#    with a self-correcting control loop that adjusts λ each epoch.
+#    Our initial λ is set to 8.0 to prioritize Bob's reconstruction.
 # ─────────────────────────────────────────────────────────────────
 class AdaptiveLambdaScheduler:
     """
@@ -259,11 +260,11 @@ class AdaptiveLambdaScheduler:
 
     Clipping ensures λ stays in [lambda_min, lambda_max].
     """
-    def __init__(self, lambda_init: float = 6.0,
+    def __init__(self, lambda_init: float = 8.0,
                  target_gap:   float = 1.5,
                  step_size:    float = 0.1,
                  lambda_min:   float = 1.0,
-                 lambda_max:   float = 12.0):
+                 lambda_max:   float = 8.0):
         self.lam        = lambda_init
         self.target_gap = target_gap
         self.eta        = step_size
@@ -344,7 +345,7 @@ class SecureDSC(nn.Module):
         λ     = AdaptiveLambdaScheduler [Enhancement 2]
     """
     def __init__(self, vocab_size: int, d_model: int = 128,
-                 channel_dim: int = 16, csi_dim: int = 32, key_dim: int = 64,
+                 channel_dim: int = 16, csi_dim: int = 64, key_dim: int = 64,
                  nhead: int = 8, num_layers: int = 4):
         super().__init__()
 
@@ -367,7 +368,12 @@ class SecureDSC(nn.Module):
         self.eve_decryptor  = Decryptor(d_model, nhead, num_layers)
         self.eve_sem_dec    = SemanticDecoder(vocab_size, d_model, nhead, num_layers)
 
-        # Channel
+        # --- Channel Configuration Note ---
+        # We model the primary data transmission over an AWGN channel (as in the base paper).
+        # However, the CSI simulation for key generation uses Rayleigh fading.
+        # This is a standard simplification: the CSI models the highly chaotic multipath
+        # estimation channel (necessary for reciprocal key entropy), while the data
+        # channel is modeled separately via AWGN to isolate baseline semantic metrics.
         self.channel        = WirelessChannel("AWGN")
 
         # ★ Enhancement 2: adaptive λ scheduler (stateful, not a nn.Module)
@@ -407,7 +413,7 @@ class SecureDSC(nn.Module):
         logits   = self.eve_sem_dec(feat_dec, tgt)
         return logits
 
-    def forward(self, src, tgt, h_alice, h_bob, h_eve=None, snr_db=12.0):
+    def forward(self, src, tgt, h_alice, h_bob, snr_db=12.0):
         """Full forward pass: returns Bob logits, Eve logits, key pair."""
         y_hat, y_bar, key_a = self.forward_alice(src, h_alice, snr_db)
 
