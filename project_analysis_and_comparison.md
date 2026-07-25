@@ -123,7 +123,10 @@ Inference: hard quantization → key ∈ {-1, +1}^64
 - Noise power: $\sigma = 1/\sqrt{2 \cdot \text{SNR}_\text{linear}}$
 
 **Key Consistency Loss:**
-$$\mathcal{L}_\text{key} = \text{MSE}(k_A, k_B)$$
+
+$$
+\mathcal{L}_\text{key} = \text{MSE}(k_A, k_B)
+$$
 
 This loss forces the shared CSI Key Generator to produce nearly identical keys from Alice's and Bob's slightly different CSI estimates.
 
@@ -146,7 +149,9 @@ The training history confirms the key consistency loss converged to effectively 
 
 The base paper uses a **fixed λ = 6** in the adversarial joint loss:
 
-$$\mathcal{L}_\text{joint} = \mathcal{L}_\text{Bob} + |\mathcal{L}_\text{Eve} - \lambda|$$
+$$
+\mathcal{L}_\text{joint} = \mathcal{L}_\text{Bob} + |\mathcal{L}_\text{Eve} - \lambda|
+$$
 
 This fixed value is problematic because:
 - The optimal λ depends on the evolving loss landscape during training
@@ -159,7 +164,9 @@ This fixed value is problematic because:
 
 The scheduler uses a **sign-based (bang-bang) controller**:
 
-$$\lambda^{(t+1)} = \text{clip}\left[\lambda^{(t)} + \eta \cdot \text{sign}(\text{gap} - \text{target\_gap}),\ \lambda_\text{min},\ \lambda_\text{max}\right]$$
+$$
+\lambda^{(t+1)} = \text{clip}\left[\lambda^{(t)} + \eta \cdot \text{sign}(\text{gap} - \text{target\_gap}),\ \lambda_\text{min},\ \lambda_\text{max}\right]
+$$
 
 where:
 - $\text{gap} = \mathcal{L}_\text{Eve} - \mathcal{L}_\text{Bob}$
@@ -209,7 +216,7 @@ The training follows a **4-phase cyclic schedule** per batch ([train.py](train.p
 |-------|-----------------|--------|------|
 | 0 | Semantic codec | `SemanticEncoder` + `SemanticDecoder` | $\mathcal{L}_\text{CE}(\hat{m}, m)$ |
 | 1 | Encryption/Decryption | `Encryptor` + `Decryptor` + `CSIKeyGen` | $\mathcal{L}_\text{CE} + \mathcal{L}_\text{key}$ |
-| 2 | Full joint (adversarial) | Alice + Bob (end-to-end) | $\mathcal{L}_\text{Bob} + |\mathcal{L}_\text{Eve} - \lambda| + \mathcal{L}_\text{key}$ |
+| 2 | Full joint (adversarial) | Alice + Bob (end-to-end) | $\mathcal{L}_\text{Bob} + \vert\mathcal{L}_\text{Eve} - \lambda\vert + \mathcal{L}_\text{key}$ |
 | 3 | Eve independently | Eve's decoder chain only | $\mathcal{L}_\text{Eve}$ (Alice frozen) |
 
 > [!NOTE]
