@@ -18,7 +18,6 @@ import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 import torch
-import torch.nn.functional as F
 from collections import Counter
 from torch.utils.data import DataLoader, Dataset
 from datasets import load_dataset
@@ -33,14 +32,25 @@ from model import SecureDSC, CSIKeyGenerator
 class EuroParlEvalDataset(Dataset):
     """
     Loads a small subset of EuroParl for evaluation.
-    Uses an offset to avoid overlap with training data.
+    Recreates the same 90/10 random split from train.py (seed=42)
+    and selects sentences exclusively from the test split.
     """
-    def __init__(self, tokenizer, seq_len=20, size=200, offset=2000000):
+    def __init__(self, tokenizer, seq_len=20, size=200):
         print(f"[Eval] Loading EuroParl eval subset ({size} sentences)...")
         dataset = load_dataset("Helsinki-NLP/europarl", "en-fr", split="train")
-        # Use sentences from a different region than training
-        start = min(offset, len(dataset) - size)
-        dataset = dataset.select(range(start, start + size))
+        
+        # Recreate the exact same random split from train.py
+        train_size = int(0.9 * len(dataset))
+        test_size = len(dataset) - train_size
+        _, test_subset = torch.utils.data.random_split(
+            range(len(dataset)), [train_size, test_size],
+            generator=torch.Generator().manual_seed(42)
+        )
+        
+        # Select the first 'size' sentences purely from the test split
+        eval_indices = test_subset.indices[:size]
+        dataset = dataset.select(eval_indices)
+        
         self.seq_len = seq_len
         self.tokenizer = tokenizer
         self.data = dataset["translation"]
@@ -93,7 +103,7 @@ def bleu_score(hypothesis, reference, max_n=4):
 # -----------------------------------------------------------------
 # KEY AGREEMENT RATE  (Enhancement 1 specific metric)
 # -----------------------------------------------------------------
-def key_agreement_rate(model, n_trials=500, csi_dim=32, device="cpu"):
+def key_agreement_rate(model, n_trials=500, csi_dim=64, device="cpu"):
     """
     Measures the fraction of trials where k_A == k_B after quantisation.
     Should be high (>95%) for Enhancement 1 to be effective.
@@ -143,7 +153,7 @@ def evaluate(args):
         vocab_size  = args.vocab_size,
         d_model     = 128,
         channel_dim = 16,
-        csi_dim     = 32,
+        csi_dim     = 64,
         key_dim     = 64,
         nhead       = 8,
         num_layers  = 4
@@ -178,7 +188,7 @@ def evaluate(args):
 
                 # Simulate CSI estimates
                 h_a, h_b, h_e = CSIKeyGenerator.simulate_csi(
-                    B, csi_dim=32, snr_db=snr_db, device=device
+                    B, csi_dim=64, snr_db=snr_db, device=device
                 )
 
                 # Alice transmits
@@ -245,7 +255,7 @@ def evaluate(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path",   type=str,   default=None)
+    parser.add_argument("--model_path",   type=str,   default="securedsc_enhanced.pt")
     parser.add_argument("--seq_len",      type=int,   default=20)
     parser.add_argument("--num_sentences",type=int,   default=200)
     parser.add_argument("--snr_range",    type=float, nargs="+",
